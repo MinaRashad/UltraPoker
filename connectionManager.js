@@ -1,5 +1,9 @@
 class PeerConnectionManager {
-  constructor() {
+  /**
+   * 
+   * @param {string|null} name 
+   */
+  constructor(name=null) {
 
     /** @type {string[]} */
     this.peer_ids = [];
@@ -7,8 +11,13 @@ class PeerConnectionManager {
     /** @type {Record<string, {send: (data: string) => void}>} */
     this.peerConnections = {};
 
+    /** @type {Record<string, string>} */
+    this.peerNames = {};
+
     /** @type {Record<string, number>} */
     this.lastSeen = {};
+
+    /** @type {Peer} */
     this.peer = new Peer();
 
     /** @type {string} */
@@ -19,6 +28,13 @@ class PeerConnectionManager {
      */
     this.log = [];
 
+    this.name = name;
+    
+
+    this.initialize(); // call the initialize method to set up event listeners
+  }
+
+  initialize() {
     // set up event listeners for incoming connections
     this.peer.on('open', (id) => {
         this.id = id;
@@ -34,8 +50,15 @@ class PeerConnectionManager {
       // set up event listener for incoming messages from this peer
       conn.on('data', (data) => {
         console.log(`Received message from ${peer_id}:`, data);
-        this.receiveMessage(data);
+        this.receiveMessage({...data, from: peer_id});
       });
+
+      conn.on('open', () => {
+        
+        this.relayPeers();
+
+        this.sendName(peer_id, this.name);
+      })
     });
     this.peer.on('disconnected', () => {
       this.logMessage("INFO", "Peer disconnected", "System");
@@ -85,8 +108,13 @@ class PeerConnectionManager {
     // set up event listener for incoming messages from this peer
     conn.on('data', (data) => {
       console.log(`Received message from ${peer_id}:`, data);
-      this.receiveMessage(data);
+      this.receiveMessage({...data, from: peer_id});
     });
+
+    conn.on('open', () => {
+      // send our name to the new peer
+      this.sendName(peer_id, this.name);
+    })
   }
 
   /**
@@ -100,7 +128,7 @@ class PeerConnectionManager {
       return;
     }
     this.peerConnections[peer_id]
-            .send({type: "message", message: message, from: this.id});
+            .send({type: "message", message: message});
   }
   
   sendToAll(message) {
@@ -117,7 +145,7 @@ class PeerConnectionManager {
    */
   heartbeat(peer_id) {
     this.peerConnections[peer_id]
-            .send({type: "heartbeat", from: this.id});
+            .send({type: "heartbeat"});
   }
 
   /**
@@ -126,10 +154,19 @@ class PeerConnectionManager {
    */
   relayPeers() {
     for (const peer_id of this.peer_ids) {
-      this.sendMessage(peer_id, {type: "peers", peers: this.peer_ids});
+      this.peerConnections[peer_id]
+            .send({type: "peers", peers: this.peer_ids, names: this.peerNames});
     }
   }
 
+
+  updateName(peer_id, name) {
+    this.peerNames[peer_id] = name;
+  }
+  sendName(peer_id, name) {
+    this.peerConnections[peer_id]
+            .send({type: "nameChange", name: name});
+  }
 
   logMessage(type, message, from) {
     this.log.push(`[${type}] ${from}: ${message}`);
@@ -143,20 +180,32 @@ class PeerConnectionManager {
  */
  receiveMessage(message) {
     console.log(message);
+
     switch (message.type) {
       case "message":
         this.logMessage("MESSAGE", message.message, message.from);
-        this.lastSeen[message.from] = Date.now();
         break;
       case "heartbeat":
-        this.lastSeen[message.from] = Date.now();
+        break;
+      case "nameChange":
+        this.updateName(message.from, message.name);
+        this.logMessage("INFO", `Peer ${message.from} changed name to ${message.name}`, "System");
+        break;
+      case "request_peers":
+        // A peer is requesting the list of peers
+        this.peerConnections[message.from]
+            .send({type: "peers", peers: this.peer_ids, names: {...this.peerNames, [this.id]: this.name}});
         break;
       case "peers":
         // A list of peers that host has
         if (Array.isArray(message.peers)) {
+          console.log(`Received peers list: ${message.peers.join(", ")}`);
           for (const peer_id of message.peers) {
             if (!this.peer_ids.includes(peer_id) && peer_id !== this.id) {
               this.connectToPeer(peer_id);
+            }
+            if (message.names && message.names[peer_id]) {
+              this.updateName(peer_id, message.names[peer_id]);
             }
           }
         }
@@ -164,6 +213,8 @@ class PeerConnectionManager {
       default:
         this.logMessage("ERROR", `Unknown message type: ${message.type}`, "System");
     }
+    if (message.from) this.lastSeen[message.from] = Date.now();
+
 
 
  }
