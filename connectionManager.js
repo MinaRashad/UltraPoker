@@ -7,29 +7,22 @@ class PeerConnectionManager {
 
     /** @type {string[]} */
     this.peer_ids = [];
-
     /** @type {Record<string, {send: (data: string) => void}>} */
     this.peerConnections = {};
-
     /** @type {Record<string, string>} */
     this.peerNames = {};
-
     /** @type {Record<string, number>} */
     this.lastSeen = {};
 
     /** @type {Peer} */
     this.peer = new Peer();
-
     /** @type {string} */
     this.id = null
-
-    /**
-     * @type {string[]}
-     */
+    /** @type {string[]} */
     this.log = [];
-
     this.name = name;
     
+    this.leader = null; // if the leader is null, then I am the leader.
 
     this.initialize(); // call the initialize method to set up event listeners
   }
@@ -115,6 +108,16 @@ class PeerConnectionManager {
       // send our name to the new peer
       this.sendName(peer_id, this.name);
     })
+
+    // if I am not the leader, set the new peer as the leader if I don't have one
+    // this is a simple leader selection method,
+    // since the person making the room wouldnt connect, they would be the leader
+    // We need to improve this later to check if the leader is still alive and
+    // elect a new leader if the current leader is not sending heartbeats
+    if (this.leader === null) {
+      this.leader = peer_id;
+      this.logMessage("INFO", `Set leader to ${peer_id}`, "System");
+    }
   }
 
   /**
