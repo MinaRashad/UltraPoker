@@ -3,97 +3,454 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Test Playground</title>
+    <title>UltraPoker Rooms</title>
+    <style>
+        :root {
+            color-scheme: dark;
+            font-family: system-ui, sans-serif;
+            background: #111827;
+            color: #f3f4f6;
+        }
+
+        * { box-sizing: border-box; }
+
+        body {
+            min-height: 100vh;
+            margin: 0;
+            display: grid;
+            place-items: center;
+            padding: 24px;
+        }
+
+        main {
+            width: min(100%, 680px);
+            padding: 32px;
+            border: 1px solid #374151;
+            border-radius: 16px;
+            background: #1f2937;
+            box-shadow: 0 20px 60px #0004;
+        }
+
+        h1, h2, p { margin-top: 0; }
+        h1 { margin-bottom: 8px; }
+        .muted, #status { color: #9ca3af; }
+        .screen[hidden] { display: none; }
+        .choices { display: grid; gap: 24px; margin-top: 28px; }
+        .choice { padding: 20px; border: 1px solid #374151; border-radius: 12px; }
+        .row { display: flex; gap: 10px; align-items: center; }
+        .row input { flex: 1; min-width: 0; }
+        input, button {
+            min-height: 44px;
+            padding: 10px 14px;
+            border: 1px solid #4b5563;
+            border-radius: 8px;
+            font: inherit;
+        }
+        input { width: 100%; color: #f9fafb; background: #111827; }
+        button {
+            border-color: #2563eb;
+            color: white;
+            background: #2563eb;
+            cursor: pointer;
+        }
+        button:hover { background: #1d4ed8; }
+        button:disabled { opacity: .55; cursor: wait; }
+        .secondary { border-color: #4b5563; background: #374151; }
+        .secondary:hover { background: #4b5563; }
+        #status { min-height: 1.5em; margin: 18px 0 0; }
+        .room-id {
+            overflow-wrap: anywhere;
+            padding: 12px;
+            border-radius: 8px;
+            color: #bfdbfe;
+            background: #111827;
+            font-family: ui-monospace, monospace;
+        }
+        #participants { padding-left: 20px; }
+        #presencePanel {
+            margin-top: 24px;
+            padding: 18px;
+            border: 1px solid #374151;
+            border-radius: 12px;
+            background: #1f2937;
+        }
+        #presencePanel[hidden] { display: none; }
+        .presence-grid {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 16px;
+        }
+        .presence-group {
+            min-width: 0;
+            padding: 14px;
+            border: 1px solid #374151;
+            border-radius: 10px;
+            background: #111827;
+        }
+        .presence-group h3 { margin: 0 0 10px; }
+        .presence-list { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
+        .presence-list li { overflow-wrap: anywhere; }
+        .presence-state { font-weight: 600; }
+        .presence-state.online { color: #86efac; }
+        .presence-state.offline { color: #fca5a5; }
+        .presence-empty { color: #9ca3af; }
+        #messages {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            min-height: 220px;
+            max-height: 50vh;
+            overflow-y: auto;
+            margin: 18px 0;
+            padding: 16px;
+            border: 1px solid #374151;
+            border-radius: 10px;
+            background: #111827;
+        }
+        .message { overflow-wrap: anywhere; }
+        .message strong { color: #93c5fd; }
+        #messageInput { flex: 1; }
+
+        @media (max-width: 520px) {
+            main { padding: 22px; }
+            .row { align-items: stretch; flex-direction: column; }
+            .presence-grid { grid-template-columns: 1fr; }
+        }
+    </style>
 </head>
 <body>
-    <label>Your ID is: <span id="yourId">Connecting...</span></label>
-    <button onclick="copyId()">Copy Id</button>
-    <input type="text" placeholder="Enter peer ID" id="idInput">
-    <button onclick="connectToPeer()">Connect</button>
+    <main>
+        <h1>UltraPoker</h1>
+        <p class="muted">Create a room or join one to play together.</p>
+        <p id="status" role="status" aria-live="polite">Connecting…</p>
 
-    <div id="chatContainer">
-        <h3>Chat</h3>
-        <div id="messages"></div>
-        <input type="text" id="messageInput" placeholder="Type a message">
-        <button onclick="sendMessage()">Send</button>
-    </div>
+        <section id="homeScreen" class="screen">
+            <label for="displayNameInput">Your name</label>
+            <input id="displayNameInput" type="text" placeholder="Enter your display name"
+                   autocomplete="nickname" maxlength="32" style="margin-top: 8px">
+            <div class="choices">
+                <div class="choice">
+                    <h2>Create a room</h2>
+                    <p class="muted">Get a room ID to share, then start when everyone is ready.</p>
+                    <button id="createButton" type="button" onclick="createRoom()">Create Room</button>
+                </div>
+                <div class="choice">
+                    <h2>Join a room</h2>
+                    <label for="roomIdInput">Room ID</label>
+                    <div class="row" style="margin-top: 8px">
+                        <input id="roomIdInput" type="text" placeholder="Enter room ID" autocomplete="off">
+                        <button id="joinButton" type="button" onclick="joinRoom()">Join Room</button>
+                    </div>
+                </div>
+            </div>
+        </section>
 
-    <div id="connectedPeersContainer">
-        <h3>Connected Peers</h3>
-        <table id="connectedPeersTable">
-            <thead>
-                <tr>
-                    <th>Peer ID</th>
-                    <th>Status</th>
-                </tr>
-            </thead>
-            <tbody id="connectedPeersBody">
-                <!-- Connected peers will be listed here -->
-            </tbody>
-        </table>
-    </div>
+        <section id="lobbyScreen" class="screen" hidden>
+            <h2 id="lobbyTitle">Room lobby</h2>
+            <p id="lobbyInstructions" class="muted"></p>
+            <p class="muted">Room ID</p>
+            <div id="roomIdDisplay" class="room-id"></div>
+            <div class="row" style="margin-top: 10px">
+                <button id="copyButton" class="secondary" type="button" onclick="copyRoomId()">Copy Room ID</button>
+                <button id="startButton" type="button" onclick="startRoom()" hidden>Start Room</button>
+            </div>
+            <h3>Players (<span id="playerCount">1</span>)</h3>
+            <ul id="participants"></ul>
+        </section>
+
+        <section id="chatScreen" class="screen" hidden>
+            <h2>Room chat</h2>
+            <p class="muted">Room ID: <span id="chatRoomId"></span></p>
+            <div id="messages" aria-live="polite" aria-label="Chat messages"></div>
+            <form id="chatForm" class="row">
+                <input id="messageInput" type="text" placeholder="Type a message…" autocomplete="off" maxlength="2000">
+                <button type="submit">Send</button>
+            </form>
+        </section>
+
+        <section id="presencePanel" aria-live="polite" hidden>
+            <h2>Players online/offline</h2>
+            <div class="presence-grid">
+                <div class="presence-group">
+                    <h3>Online (<span id="onlineCount">0</span>)</h3>
+                    <ul id="onlinePlayers" class="presence-list"></ul>
+                </div>
+                <div class="presence-group">
+                    <h3>Offline (<span id="offlineCount">0</span>)</h3>
+                    <ul id="offlinePlayers" class="presence-list"></ul>
+                </div>
+            </div>
+        </section>
+    </main>
 
     <script src="https://cdn.jsdelivr.net/npm/peerjs@1.3.2/dist/peerjs.min.js"></script>
     <script src="connectionManager.js"></script>
+    <script src="Engine.js"></script>
+    <script src="Poker.js"></script>
     <script>
         const connectionManager = new PeerConnectionManager();
-        
-        // Display your ID once connected
-        connectionManager.getPeerId().then(id => {
-            document.getElementById('yourId').textContent = id;
-        }).catch(err => {
-            console.error('Error getting peer ID:', err);
-        });
-        
-        // always put all the logs in the messages div
-        setInterval(() => {
-            const messagesDiv = document.getElementById('messages');
-            messagesDiv.innerHTML = '';
-            connectionManager.log.forEach(log => {
-                const logElement = document.createElement('div');
-                logElement.textContent = log;
-                messagesDiv.appendChild(logElement);
-            });
+        const ROOM_STARTED_MESSAGE = "Room started.";
+        const ONLINE_TIMEOUT_MS = 15000;
+        let roomRole = null;
+        let roomId = null;
+        let hostPeerId = null;
+        let processedLogCount = 0;
 
-            // Update connected peers table 
-            const connectedPeersBody = document.getElementById('connectedPeersBody');
-            connectedPeersBody.innerHTML = '';
-            // use lastSeen = {}
-            // this contains IDs and timestamps of last seen messages from peers
-            // if it was last seen more than 10 seconds ago, mark it as disconnected
-            const now = Date.now();
-            for (const peer_id of connectionManager.peer_ids) {
-                const lastSeen = connectionManager.lastSeen[peer_id];
-                const status = (lastSeen && (now - lastSeen < 10000)) ? 'Connected' : 'Disconnected';
-                const row = document.createElement('tr');
-                const idCell = document.createElement('td');
-                idCell.textContent = peer_id;
-                const statusCell = document.createElement('td');
-                statusCell.textContent = status;
-                row.appendChild(idCell);
-                row.appendChild(statusCell);
-                connectedPeersBody.appendChild(row);
+        connectionManager.getPeerId().then(() => {
+            setStatus("Ready to create or join a room.");
+            document.getElementById("createButton").disabled = false;
+            document.getElementById("joinButton").disabled = false;
+        }).catch((error) => {
+            setStatus(`Could not connect to the peer network: ${error.message || error}`);
+        });
+
+        document.getElementById("createButton").disabled = true;
+        document.getElementById("joinButton").disabled = true;
+        document.getElementById("chatForm").addEventListener("submit", (event) => {
+            event.preventDefault();
+            sendMessage();
+        });
+
+        setInterval(() => {
+            processConnectionLog();
+            updateParticipants();
+            updatePresencePanel();
+        }, 250);
+
+        function setStatus(message) {
+            document.getElementById("status").textContent = message;
+        }
+
+        function processConnectionLog() {
+            const log = connectionManager.log;
+            while (processedLogCount < log.length) {
+                const entry = log[processedLogCount++];
+                if (!entry.startsWith("[MESSAGE] ")) continue;
+
+                const separator = entry.indexOf(": ", 10);
+                if (separator < 0) continue;
+                const senderId = entry.slice(10, separator);
+                const message = entry.slice(separator + 2);
+
+                if (roomRole === "guest" && senderId === hostPeerId &&
+                    message === ROOM_STARTED_MESSAGE && document.getElementById("chatScreen").hidden) {
+                    showChat();
+                    setStatus("Room started.");
+                    appendMessage(senderId, message);
+                } else if (!document.getElementById("chatScreen").hidden) {
+                    appendMessage(senderId, message);
+                }
+            }
+        }
+
+        function updateParticipants() {
+            const participants = document.getElementById("participants");
+            participants.replaceChildren();
+            const peerIds = new Set([connectionManager.id, ...connectionManager.peer_ids]);
+            for (const id of peerIds) {
+                if (!id) continue;
+                const item = document.createElement("li");
+                const name = connectionManager.peerNames[id] || (id === connectionManager.id
+                    ? connectionManager.name
+                    : null);
+                const label = name ? `${name} (${id})` : id;
+                if (id === connectionManager.id) {
+                    item.textContent = roomRole === "host" ? `${label} (you, host)` : `${label} (you)`;
+                } else if (id === hostPeerId) {
+                    item.textContent = `${label} (host)`;
+                } else {
+                    item.textContent = label;
+                }
+                participants.appendChild(item);
+            }
+            document.getElementById("playerCount").textContent = String(peerIds.size);
+
+            if (roomRole === "host") {
+                const peersReady = connectionManager.peer_ids.every((id) =>
+                    connectionManager.peerConnections[id] &&
+                    connectionManager.peerConnections[id].open
+                );
+                document.getElementById("startButton").disabled = !peersReady;
             }
 
+            if (roomRole === "guest" && hostPeerId &&
+                connectionManager.peerConnections[hostPeerId] &&
+                connectionManager.peerConnections[hostPeerId].open &&
+                document.getElementById("status").textContent === "Connecting to room…") {
+                setStatus("Connected to host. Waiting for the host to start…");
+            }
+        }
 
-        }, 1000);
+        function updatePresencePanel() {
+            const panel = document.getElementById("presencePanel");
+            panel.hidden = roomRole === null;
+            if (panel.hidden) return;
 
-        function connectToPeer() {
-            const peerId = document.getElementById('idInput').value;
-            connectionManager.connectToPeer(peerId);
+            const online = [];
+            const offline = [];
+            const now = Date.now();
+            const peerIds = new Set([connectionManager.id, ...connectionManager.peer_ids]);
+
+            for (const id of peerIds) {
+                if (!id) continue;
+                const name = connectionManager.peerNames[id] ||
+                    (id === connectionManager.id ? connectionManager.name : null);
+                const label = name ? `${name} (${id})` : id;
+                const isOnline = id === connectionManager.id ||
+                    (connectionManager.lastSeen[id] &&
+                        now - connectionManager.lastSeen[id] < ONLINE_TIMEOUT_MS);
+                (isOnline ? online : offline).push({ id, label });
+            }
+
+            renderPresenceList("onlinePlayers", online, "No players online.");
+            renderPresenceList("offlinePlayers", offline, "No players offline.");
+            document.getElementById("onlineCount").textContent = String(online.length);
+            document.getElementById("offlineCount").textContent = String(offline.length);
+        }
+
+        function renderPresenceList(elementId, players, emptyMessage) {
+            const list = document.getElementById(elementId);
+            list.replaceChildren();
+
+            if (players.length === 0) {
+                const empty = document.createElement("li");
+                empty.className = "presence-empty";
+                empty.textContent = emptyMessage;
+                list.appendChild(empty);
+                return;
+            }
+
+            for (const player of players) {
+                const item = document.createElement("li");
+                item.textContent = player.label;
+                list.appendChild(item);
+            }
+        }
+
+        async function createRoom() {
+            try {
+                roomId = await connectionManager.getPeerId();
+                if (!setDisplayName()) return;
+                roomRole = "host";
+                document.getElementById("homeScreen").hidden = true;
+                document.getElementById("lobbyScreen").hidden = false;
+                document.getElementById("lobbyTitle").textContent = "Room lobby";
+                document.getElementById("lobbyInstructions").textContent =
+                    "Share this ID with everyone you want to invite. Start the room when they have joined.";
+                document.getElementById("roomIdDisplay").textContent = roomId;
+                document.getElementById("startButton").hidden = false;
+                updateParticipants();
+                setStatus("Room created. Waiting for players to join…");
+            } catch (error) {
+                setStatus(`Could not create a room: ${error.message || error}`);
+            }
+        }
+
+        async function joinRoom() {
+            const requestedRoomId = document.getElementById("roomIdInput").value.trim();
+            if (!requestedRoomId) {
+                setStatus("Enter a room ID to join.");
+                return;
+            }
+
+            const joinButton = document.getElementById("joinButton");
+            joinButton.disabled = true;
+            try {
+                await connectionManager.getPeerId();
+                if (!setDisplayName()) {
+                    joinButton.disabled = false;
+                    return;
+                }
+                if (requestedRoomId === connectionManager.id) {
+                    setStatus("You cannot join your own room.");
+                    joinButton.disabled = false;
+                    return;
+                }
+
+                roomRole = "guest";
+                roomId = requestedRoomId;
+                hostPeerId = requestedRoomId;
+                document.getElementById("homeScreen").hidden = true;
+                document.getElementById("lobbyScreen").hidden = false;
+                document.getElementById("lobbyTitle").textContent = "Waiting room";
+                document.getElementById("lobbyInstructions").textContent =
+                    "You are in the room. The host will start when everyone is ready.";
+                document.getElementById("roomIdDisplay").textContent = roomId;
+                document.getElementById("copyButton").hidden = true;
+                document.getElementById("startButton").hidden = true;
+                updateParticipants();
+                setStatus("Connecting to room…");
+                connectionManager.connectToPeer(hostPeerId);
+            } catch (error) {
+                setStatus(`Could not join the room: ${error.message || error}`);
+                joinButton.disabled = false;
+            }
+        }
+
+        async function copyRoomId() {
+            try {
+                await navigator.clipboard.writeText(roomId);
+                setStatus("Room ID copied.");
+            } catch (error) {
+                setStatus(`Could not copy room ID: ${error.message || error}`);
+            }
+        }
+
+        function startRoom() {
+            if (roomRole !== "host") return;
+            connectionManager.sendToAll(ROOM_STARTED_MESSAGE);
+            showChat();
+            setStatus("Room started.");
+        }
+
+        function setDisplayName() {
+            const input = document.getElementById("displayNameInput");
+            const name = input.value.trim();
+            if (!name) {
+                setStatus("Enter your name first.");
+                input.focus();
+                return false;
+            }
+
+            connectionManager.name = name;
+            connectionManager.updateName(connectionManager.id, name);
+            return true;
+        }
+
+        function showChat() {
+            document.getElementById("lobbyScreen").hidden = true;
+            document.getElementById("chatScreen").hidden = false;
+            document.getElementById("chatRoomId").textContent = roomId;
+            document.getElementById("messageInput").focus();
+        }
+
+        function appendMessage(sender, message) {
+            const messages = document.getElementById("messages");
+            const entry = document.createElement("div");
+            entry.className = "message";
+            const name = document.createElement("strong");
+            const displayName = connectionManager.peerNames[sender] || sender;
+            name.textContent = sender === connectionManager.id ? "You" : displayName;
+            entry.append(name, document.createTextNode(`: ${message}`));
+            messages.appendChild(entry);
+            messages.scrollTop = messages.scrollHeight;
         }
 
         function sendMessage() {
-            const message = document.getElementById('messageInput').value;
-            const peerId = document.getElementById('idInput').value;
-            connectionManager.sendToAll(message);
-        }
+            const input = document.getElementById("messageInput");
+            const message = input.value.trim();
+            if (!message) return;
 
-        function copyId() {
-            const yourId = document.getElementById('yourId').textContent;
-            navigator.clipboard.writeText(yourId).catch(err => {
-                console.error('Failed to copy ID: ', err);
-            });
+            if (roomRole !== "host" && roomRole !== "guest") return;
+            if (roomRole === "guest" &&
+                (!connectionManager.peerConnections[hostPeerId] ||
+                    !connectionManager.peerConnections[hostPeerId].open)) {
+                setStatus("Not connected to the host.");
+                return;
+            }
+            connectionManager.sendToAll(message);
+            input.value = "";
+            input.focus();
         }
     </script>
 </body>

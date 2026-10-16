@@ -5,6 +5,7 @@ class PeerConnectionManager {
    */
   constructor(name=null) {
 
+    // Network information
     /** @type {string[]} */
     this.peer_ids = [];
     /** @type {Record<string, {send: (data: string) => void}>} */
@@ -13,7 +14,9 @@ class PeerConnectionManager {
     this.peerNames = {};
     /** @type {Record<string, number>} */
     this.lastSeen = {};
+    this.leader = null; // if the leader is null, then I am the leader.
 
+    // My information
     /** @type {Peer} */
     this.peer = new Peer();
     /** @type {string} */
@@ -21,8 +24,16 @@ class PeerConnectionManager {
     /** @type {string[]} */
     this.log = [];
     this.name = name;
+    this.canConnect = true
+    // Handlers process the two deck-ceremony messages after they arrive.
+    this.reliableMessageHandlers = new Map();
+    // Outgoing messages stay here until the intended peer acknowledges them.
+    this.pendingReliableMessages = new Map();
+    // Remember received transfer IDs so retries are acknowledged but not processed twice.
+    this.receivedReliableMessages = new Set();
+    // Add a local counter to the sender ID and timestamp to distinguish transfers.
+    this.reliableMessageCounter = 0;
     
-    this.leader = null; // if the leader is null, then I am the leader.
 
     this.initialize(); // call the initialize method to set up event listeners
   }
@@ -34,6 +45,10 @@ class PeerConnectionManager {
         this.logMessage("INFO", `Peer initialized with id: ${id}`, "System");
     });
     this.peer.on('connection', (conn) => {
+      if (!this.canConnect){
+        conn.close()
+        return
+      }
       const peer_id = conn.peer;
       this.peer_ids.push(peer_id);
       this.peerConnections[peer_id] = conn;
@@ -109,11 +124,8 @@ class PeerConnectionManager {
       this.sendName(peer_id, this.name);
     })
 
-    // if I am not the leader, set the new peer as the leader if I don't have one
-    // this is a simple leader selection method,
-    // since the person making the room wouldnt connect, they would be the leader
-    // We need to improve this later to check if the leader is still alive and
-    // elect a new leader if the current leader is not sending heartbeats
+    // Guests connect to the room host first, so this identifies that host as leader.
+    // This is only a simple initial leader choice; it does not elect a replacement.
     if (this.leader === null) {
       this.leader = peer_id;
       this.logMessage("INFO", `Set leader to ${peer_id}`, "System");
@@ -142,6 +154,106 @@ class PeerConnectionManager {
     }
   }
 
+  registerReliableMessageHandler(type, handler) {
+    if (type !== "deck_order" && type !== "deck_forward") {
+      throw new TypeError(`Unsupported reliable message type: ${type}`);
+    }
+    this.reliableMessageHandlers.set(type, handler);
+  }
+
+  /**
+   * Send a deck-ceremony message and wait for the receiving peer to acknowledge it.
+   * Retries use the same transfer ID so the receiver can recognize duplicates.
+   * @param {string} peer_id
+   * @param {"deck_order"|"deck_forward"} type
+   * @param {Object} payload
+   * @returns {Promise<void>}
+   */
+  sendReliableMessage(peer_id, type, payload) {
+    if (type !== "deck_order" && type !== "deck_forward") {
+      return Promise.reject(new TypeError(`Unsupported reliable message type: ${type}`));
+    }
+
+    const connection = this.peerConnections[peer_id];
+    if (!connection) {
+      return Promise.reject(new Error(`Not connected to peer ${peer_id}`));
+    }
+
+    const transferId = `${this.id}-${Date.now()}-${++this.reliableMessageCounter}`;
+    const message = { ...payload, type, transferId };
+
+    return new Promise((resolve, reject) => {
+      // Keep the message and its promise callbacks until an ACK arrives or retries run out.
+      const pending = { peer_id, message, resolve, reject, attempts: 0, timer: null };
+      this.pendingReliableMessages.set(transferId, pending);
+
+      const transmit = () => {
+        try {
+          pending.attempts += 1;
+          connection.send(message);
+          // A synchronous/in-memory receiver may already have acknowledged during send().
+          if (!this.pendingReliableMessages.has(transferId)) return;
+          pending.timer = setTimeout(() => {
+            if (pending.attempts >= 4) {
+              this.pendingReliableMessages.delete(transferId);
+              reject(new Error(`No acknowledgement from peer ${peer_id} for ${type}`));
+              return;
+            }
+            transmit();
+          }, 1000);
+        } catch (error) {
+          clearTimeout(pending.timer);
+          this.pendingReliableMessages.delete(transferId);
+          reject(error);
+        }
+      };
+
+      transmit();
+    });
+  }
+
+  /**
+   * Acknowledge every delivery, including retries, but run the handler only once.
+   * The ACK means the message was received; the handler may continue processing afterward.
+   * @param {Object} message
+   */
+  receiveReliableMessage(message) {
+    if (typeof message.transferId !== "string") {
+      this.logMessage("ERROR", `Missing transfer ID for ${message.type}`, "System");
+      return;
+    }
+
+    const receivedKey = `${message.from}:${message.transferId}`;
+    const connection = this.peerConnections[message.from];
+    if (!connection) {
+      this.logMessage("ERROR", `No connection to acknowledge peer ${message.from}`, "System");
+      return;
+    }
+
+    try {
+      connection.send({ type: "deck_ack", transferId: message.transferId });
+    } catch (error) {
+      this.logMessage("ERROR", `Could not acknowledge ${message.type}: ${error.message || error}`, "System");
+    }
+    // If an ACK was lost, the sender retries; do not apply the same deck layer twice.
+    if (this.receivedReliableMessages.has(receivedKey)) return;
+    this.receivedReliableMessages.add(receivedKey);
+
+    const handler = this.reliableMessageHandlers.get(message.type);
+    if (!handler) {
+      this.logMessage("ERROR", `No handler registered for ${message.type}`, "System");
+      return;
+    }
+
+    try {
+      Promise.resolve(handler(message, message.from)).catch((error) => {
+        this.logMessage("ERROR", `Failed to process ${message.type}: ${error.message || error}`, "System");
+      });
+    } catch (error) {
+      this.logMessage("ERROR", `Failed to process ${message.type}: ${error.message || error}`, "System");
+    }
+  }
+
   /**
    * @param {string} peer_id
    * @returns {void}
@@ -162,6 +274,9 @@ class PeerConnectionManager {
     }
   }
 
+  closeConnections(from){
+    if(from == this.leader) this.canConnect = false
+  }
 
   updateName(peer_id, name) {
     this.peerNames[peer_id] = name;
@@ -190,9 +305,26 @@ class PeerConnectionManager {
         break;
       case "heartbeat":
         break;
+      case "deck_order":
+      case "deck_forward":
+        this.receiveReliableMessage(message);
+        break;
+      case "deck_ack": {
+        // Only the peer we sent this transfer to may complete its pending send.
+        const pending = this.pendingReliableMessages.get(message.transferId);
+        if (pending && pending.peer_id === message.from) {
+          clearTimeout(pending.timer);
+          this.pendingReliableMessages.delete(message.transferId);
+          pending.resolve();
+        }
+        break;
+      }
       case "nameChange":
         this.updateName(message.from, message.name);
         this.logMessage("INFO", `Peer ${message.from} changed name to ${message.name}`, "System");
+        break;
+      case "closeConnections":
+        this.closeConnections(message.from)
         break;
       case "request_peers":
         // A peer is requesting the list of peers
