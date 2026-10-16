@@ -61,6 +61,9 @@ class P2PEngine {
     connectionManager.registerReliableMessageHandler("deck_forward", (message, from) =>
       this.receiveDeck(message, from)
     );
+    connectionManager.registerReliableMessageHandler("deck_ready", (message, from) =>
+      this.receiveFinalDeck(message, from)
+    );
   }
 
   async startDeckCeremony(order, connectionManager = this.connectionManager) {
@@ -118,6 +121,9 @@ class P2PEngine {
         !Number.isInteger(message.step)) {
       throw new TypeError("Received an invalid encrypted deck.");
     }
+    if (message.action !== undefined) {
+      throw new Error("Deck forwarding only supports the encryption ceremony.");
+    }
 
     const lastPeerIndex = this.order.length - 1;
     // The final step comes back to the leader after every participant has applied a layer.
@@ -127,11 +133,12 @@ class P2PEngine {
       }
       this.completeDeck(message.deck);
       this.reportDeckStage("fully-encrypted", message.deck);
-      return;
-    }
-
-    if (message.action === "decrypt") {
-      await this.receiveDeckForDecryption(message, from);
+      await Promise.all(this.order.slice(1).map((peerId) =>
+        this.connectionManager.sendReliableMessage(peerId, "deck_ready", {
+          deck: message.deck,
+          order: this.order,
+        })
+      ));
       return;
     }
 
@@ -167,75 +174,6 @@ class P2PEngine {
     return shuffledDeck.map((card) => (card ^ this.privateKey) >>> 0);
   }
 
-  decryptDeckLayer(deck) {
-    const layer = this.encryptionLayers.pop();
-    if (!layer) {
-      throw new Error("There are no encryption layers to remove.");
-    }
-    if (!Array.isArray(deck) || deck.length !== layer.order.length) {
-      this.encryptionLayers.push(layer);
-      throw new TypeError("Deck does not match the encryption layer.");
-    }
-
-    // XOR first to restore the shuffled values, then put each value back in its old position.
-    const unshuffled = new Array(deck.length);
-    deck.forEach((card, shuffledIndex) => {
-      unshuffled[layer.order[shuffledIndex]] = (card ^ layer.key) >>> 0;
-    });
-    return unshuffled;
-  }
-
-  async startDeckDecryption() {
-    if (!this.connectionManager || !this.deckReady || !this.order) {
-      throw new Error("The encrypted deck must be ready before decryption starts.");
-    }
-    if (this.connectionManager.id !== this.order[0]) {
-      throw new Error("Only the leader can start deck decryption.");
-    }
-
-    this.deckReady = false;
-    this.reportDeckStage("before-decryption", this.EncryptedDeck);
-    const lastPeerIndex = this.order.length - 1;
-    if (lastPeerIndex === 0) {
-      this.completeDeck(this.decryptDeckLayer(this.EncryptedDeck));
-      this.reportDeckStage("fully-decrypted", this.EncryptedDeck);
-      return;
-    }
-
-    await this.connectionManager.sendReliableMessage(
-      this.order[lastPeerIndex],
-      "deck_forward",
-      { action: "decrypt", deck: this.EncryptedDeck, step: lastPeerIndex }
-    );
-  }
-
-  async receiveDeckForDecryption(message, from) {
-    const step = message.step;
-    const myIndex = this.order.indexOf(this.connectionManager.id);
-    const expectedSender = step === this.order.length - 1
-      ? this.order[0]
-      : this.order[step + 1];
-    if (myIndex !== step || from !== expectedSender) {
-      throw new Error("Encrypted deck was sent to the wrong peer for decryption.");
-    }
-
-    this.reportDeckStage("before-decryption", message.deck);
-    const decryptedDeck = this.decryptDeckLayer(message.deck);
-    this.reportDeckStage("after-decryption", decryptedDeck);
-
-    if (step === 0) {
-      this.completeDeck(decryptedDeck);
-      this.reportDeckStage("fully-decrypted", decryptedDeck);
-      return;
-    }
-
-    await this.connectionManager.sendReliableMessage(
-      this.order[step - 1],
-      "deck_forward",
-      { action: "decrypt", deck: decryptedDeck, step: step - 1 }
-    );
-  }
-
   reportDeckStage(stage, deck) {
     if (typeof this.onDeckStage === "function") {
       this.onDeckStage({ stage, deck: [...deck] });
@@ -261,6 +199,52 @@ class P2PEngine {
   completeDeck(deck) {
     this.EncryptedDeck = [...deck];
     this.deckReady = true;
+  }
+
+  receiveFinalDeck(message, from) {
+    if (!this.order || from !== this.order[0] ||
+        JSON.stringify(message.order) !== JSON.stringify(this.order) ||
+        !Array.isArray(message.deck) || message.deck.length !== this.cardDefinitions.length ||
+        message.deck.some((card) => !Number.isInteger(card) || card < 0 || card > 0xffffffff)) {
+      throw new Error("Received an invalid final encrypted deck.");
+    }
+    this.completeDeck(message.deck);
+    this.reportDeckStage("fully-encrypted", message.deck);
+  }
+
+  decryptCardLayer(value, position, layerIndex) {
+    const ownIndex = this.order.indexOf(this.connectionManager.id);
+    const layer = this.encryptionLayers[0];
+    if (ownIndex !== layerIndex || !layer ||
+        !Number.isInteger(position) || position < 0 || position >= layer.order.length ||
+        !Number.isInteger(value) || value < 0 || value > 0xffffffff) {
+      throw new Error("This peer cannot decrypt the requested card layer.");
+    }
+
+    return {
+      value: (value ^ layer.key) >>> 0,
+      position: layer.order[position],
+    };
+  }
+
+  getPreviousLayerCardPosition(position, layerIndex) {
+    const ownIndex = this.order.indexOf(this.connectionManager.id);
+    const layer = this.encryptionLayers[0];
+    if (ownIndex !== layerIndex || !layer ||
+        !Number.isInteger(position) || position < 0 || position >= layer.order.length) {
+      throw new Error("This peer cannot map the requested card position.");
+    }
+    return layer.order[position];
+  }
+
+  decryptOwnCard(value, layerIndex) {
+    const ownIndex = this.order.indexOf(this.connectionManager.id);
+    const layer = this.encryptionLayers[0];
+    if (ownIndex !== layerIndex || !layer ||
+        !Number.isInteger(value) || value < 0 || value > 0xffffffff) {
+      throw new Error("This peer cannot remove its key from the requested card.");
+    }
+    return (value ^ layer.key) >>> 0;
   }
 
 }

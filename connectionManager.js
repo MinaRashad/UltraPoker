@@ -1,7 +1,7 @@
 class PeerConnectionManager {
   /**
    * 
-   * @param {string|null} name 
+   * @param {string|null} name The name of the game
    */
   constructor(name=null) {
 
@@ -27,6 +27,7 @@ class PeerConnectionManager {
     this.canConnect = true
     // Handlers process the two deck-ceremony messages after they arrive.
     this.reliableMessageHandlers = new Map();
+    this.gameMessageHandlers = new Map();
     // Outgoing messages stay here until the intended peer acknowledges them.
     this.pendingReliableMessages = new Map();
     // Remember received transfer IDs so retries are acknowledged but not processed twice.
@@ -155,10 +156,25 @@ class PeerConnectionManager {
   }
 
   registerReliableMessageHandler(type, handler) {
-    if (type !== "deck_order" && type !== "deck_forward") {
+    if (!["deck_order", "deck_forward", "deck_ready"].includes(type)) {
       throw new TypeError(`Unsupported reliable message type: ${type}`);
     }
     this.reliableMessageHandlers.set(type, handler);
+  }
+
+  registerGameHandler(gameName, handler) {
+    if (typeof gameName !== "string" || !gameName || typeof handler !== "function") {
+      throw new TypeError("A game name and message handler are required.");
+    }
+    this.gameMessageHandlers.set(gameName, handler);
+  }
+
+  sendGameMessage(peer_id, gameName, payload) {
+    const connection = this.peerConnections[peer_id];
+    if (!connection || !connection.open) {
+      throw new Error(`Not connected to peer ${peer_id}`);
+    }
+    connection.send({ type: "game_message", game: gameName, payload });
   }
 
   /**
@@ -170,7 +186,7 @@ class PeerConnectionManager {
    * @returns {Promise<void>}
    */
   sendReliableMessage(peer_id, type, payload) {
-    if (type !== "deck_order" && type !== "deck_forward") {
+    if (!["deck_order", "deck_forward", "deck_ready"].includes(type)) {
       return Promise.reject(new TypeError(`Unsupported reliable message type: ${type}`));
     }
 
@@ -307,6 +323,7 @@ class PeerConnectionManager {
         break;
       case "deck_order":
       case "deck_forward":
+      case "deck_ready":
         this.receiveReliableMessage(message);
         break;
       case "deck_ack": {
@@ -323,6 +340,21 @@ class PeerConnectionManager {
         this.updateName(message.from, message.name);
         this.logMessage("INFO", `Peer ${message.from} changed name to ${message.name}`, "System");
         break;
+      case "game_message": {
+        const handler = this.gameMessageHandlers.get(message.game);
+        if (!handler) {
+          this.logMessage("ERROR", `No handler registered for game ${message.game}`, message.from);
+          break;
+        }
+        try {
+          Promise.resolve(handler(message.payload, message.from)).catch((error) => {
+            this.logMessage("ERROR", `Game ${message.game} message failed: ${error.message || error}`, "System");
+          });
+        } catch (error) {
+          this.logMessage("ERROR", `Game ${message.game} message failed: ${error.message || error}`, "System");
+        }
+        break;
+      }
       case "closeConnections":
         this.closeConnections(message.from)
         break;
