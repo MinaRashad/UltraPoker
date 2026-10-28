@@ -1,26 +1,95 @@
 /**
- * @description This constructor goal is to help simulate
+ * Shared state for game implementations built on the generic deck engine.
  */
 class Game {
     constructor() {
+        /** @type {string[]} */
         this.players = [];
+        /** @type {number} */
         this.currentPlayerIndex = 0;
+        /** @type {number[]} */
         this.deck = [];
+        /** @type {string[]} */
         this.communityCards = [];
+        /** @type {number} */
         this.pot = 0;
+        /** @type {number} */
         this.currentBet = 0;
+        /** @type {number} 0: pre-flop, 1: flop, 2: turn, 3: river. */
         this.round = 0; // 0: Pre-flop, 1: Flop, 2: Turn, 3: River
     }
 }
 
+/**
+ * @typedef {Object} PokerMessage
+ * @property {string} [action]
+ * @property {string} [requestId]
+ * @property {string} [requester]
+ * @property {string} [ownerId]
+ * @property {"private"|"public"} [visibility]
+ * @property {number} [dealPosition]
+ * @property {number} [layerIndex]
+ * @property {number} [value]
+ * @property {number} [position]
+ */
+
+/**
+ * Data sent to a peer that owns a layer needed to reveal one card.
+ * @typedef {Object} CardLayerRequest
+ * @property {string} peerId
+ * @property {string} requester
+ * @property {number} dealPosition
+ * @property {string|null} ownerId
+ * @property {"private"|"public"} visibility
+ * @property {number} layerIndex
+ * @property {number} value
+ * @property {number} position
+ */
+
+/**
+ * @typedef {Object} DecryptedCard
+ * @property {number} cardId Numeric index into the engine's card definitions.
+ * @property {string} card Human-readable card label.
+ * @property {string|null} ownerId Player who owns this private card, or null for public cards.
+ * @property {"private"|"public"} visibility
+ * @property {number} dealPosition Position in the final encrypted deck.
+ */
+
+/**
+ * @typedef {Object} PendingCardRequest
+ * @property {string} peerId
+ * @property {(result: {value: number, position: number}) => void} resolve
+ * @property {(error: Error) => void} reject
+ * @property {ReturnType<typeof setTimeout>} timer
+ */
+
+/**
+ * Minimum connection-manager API required by Poker.
+ * @typedef {Object} PokerConnectionManager
+ * @property {string} id
+ * @property {(gameName: string, handler: (message: PokerMessage, from: string) => void|Promise<void>) => void} registerGameHandler
+ * @property {(peerId: string, gameName: string, payload: Object) => void} sendGameMessage
+ */
+
 class Poker extends Game {
+    /**
+     * Connect game-level rules to the transport and generic deck engine.
+     * @param {PokerConnectionManager} connectionManager
+     * @param {P2PEngine} engine
+     */
     constructor(connectionManager, engine) {
         super();
+        /** @type {PokerConnectionManager} */
         this.connectionManager = connectionManager;
+        /** @type {P2PEngine} */
         this.engine = engine;
+        /** @type {string[]|null} */
         this.order = null;
+        /** @type {Map<string, PendingCardRequest>} */
         this.pendingCardRequests = new Map();
+        /** @type {number} */
         this.cardRequestCounter = 0;
+        /** @type {((entry: Object) => void)|null} */
         this.onCardLog = null;
 
         engine.attachConnectionManager(connectionManager);
@@ -29,6 +98,11 @@ class Poker extends Game {
         );
     }
 
+    /**
+     * Set the shared dealing order and ensure it agrees with the deck ceremony.
+     * @param {string[]} order
+     * @returns {void}
+     */
     setPlayers(order) {
         this.engine.validateOrder(order);
         if (this.engine.order &&
@@ -39,6 +113,13 @@ class Poker extends Game {
         this.players = [...order];
     }
 
+    /**
+     * In the prototype's two-round deal, each player's first card is dealt
+     * before the second round begins. Positions after those private cards are
+     * treated as public/community cards.
+     * @param {number} dealPosition
+     * @returns {string|null} The owning player ID, or null for a public card.
+     */
     getCardOwner(dealPosition) {
         if (!this.order) {
             throw new Error("Poker players have not been set.");
@@ -54,6 +135,13 @@ class Poker extends Game {
             : null;
     }
 
+    /**
+     * Resolve one card without changing the shared encrypted deck. Each peer
+     * removes only its own layer; private-card owners keep the final key removal
+     * local so their hole-card value is not sent to another player.
+     * @param {number} dealPosition
+     * @returns {Promise<DecryptedCard>}
+     */
     async requestCard(dealPosition) {
         if (!this.engine.deckReady || !this.order) {
             throw new Error("The encrypted deck and player order must be ready.");
@@ -69,7 +157,8 @@ class Poker extends Game {
         let position = dealPosition;
         const ownerLayerIndex = ownerId === null ? -1 : this.order.indexOf(ownerId);
 
-        // Trace this card's position through each layer; the owner removes its key last.
+        // Walk the layers backwards so each peer receives the card position and
+        // value that correspond to its own shuffle/encryption layer.
         for (let layerIndex = this.order.length - 1; layerIndex >= 0; layerIndex -= 1) {
             const peerId = this.order[layerIndex];
             if (peerId === this.connectionManager.id) {
@@ -113,6 +202,12 @@ class Poker extends Game {
         return { cardId: value, card, ownerId, visibility, dealPosition };
     }
 
+    /**
+     * Ask a remote layer owner to process one card and resolve when its response
+     * arrives. A timeout rejects the request rather than exposing a partial card.
+     * @param {CardLayerRequest} request
+     * @returns {Promise<{value: number, position: number}>}
+     */
     requestLayerFromPeer(request) {
         const requestId =
             `${this.connectionManager.id}-${Date.now()}-${++this.cardRequestCounter}`;
@@ -153,6 +248,12 @@ class Poker extends Game {
         });
     }
 
+    /**
+     * Route an incoming Poker protocol message to its request or response handler.
+     * @param {PokerMessage} message
+     * @param {string} from
+     * @returns {Promise<void>}
+     */
     async receiveGameMessage(message, from) {
         if (!message || typeof message.action !== "string") {
             throw new TypeError("Poker message must include an action.");
@@ -166,6 +267,13 @@ class Poker extends Game {
         }
     }
 
+    /**
+     * Validate that the sender may request this layer, decrypt that layer only,
+     * and return the transformed value and position to the requester.
+     * @param {PokerMessage} message
+     * @param {string} from
+     * @returns {Promise<void>}
+     */
     async handleDecryptRequest(message, from) {
         if (!this.engine.deckReady || !this.order) {
             throw new Error("Cannot decrypt a card before the final deck is ready.");
@@ -221,6 +329,12 @@ class Poker extends Game {
         });
     }
 
+    /**
+     * Match a decryption response to its outstanding request and resolve it.
+     * @param {PokerMessage} message
+     * @param {string} from
+     * @returns {void}
+     */
     handleDecryptResult(message, from) {
         this.logCardMessage("RECEIVE DECRYPT RESULT", {
             from,
@@ -240,6 +354,12 @@ class Poker extends Game {
         pending.resolve({ value: message.value, position: message.position });
     }
 
+    /**
+     * Emit a card-protocol event to the optional UI/test logger.
+     * @param {string} action
+     * @param {Object} details
+     * @returns {void}
+     */
     logCardMessage(action, details) {
         const entry = {
             action,

@@ -251,7 +251,7 @@ class PeerConnectionManager {
     } catch (error) {
       this.logMessage("ERROR", `Could not acknowledge ${message.type}: ${error.message || error}`, "System");
     }
-    // If an ACK was lost, the sender retries; do not apply the same deck layer twice.
+    // If an ACK was lost, the sender retries do not apply the same deck layer twice.
     if (this.receivedReliableMessages.has(receivedKey)) return;
     this.receivedReliableMessages.add(receivedKey);
 

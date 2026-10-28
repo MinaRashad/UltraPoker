@@ -1,0 +1,496 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>UltraPoker Dealing Demo</title>
+  <style>
+    :root {
+      --bg: #0b1220;
+      --ink: #e8eef7;
+      --muted: #9fb0c6;
+      --felt: #0d4a35;
+      --felt-edge: #093626;
+      --accent: #f5c451;
+      --panel: rgba(0, 0, 0, 0.22);
+      --cw: clamp(54px, 8.5vw, 92px);
+      --ccw: clamp(58px, 10vw, 104px);
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      color: var(--ink);
+      background: var(--bg);
+      font: 16px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif;
+    }
+
+    main { max-width: 1100px; margin: 0 auto; padding: 24px 16px 48px; }
+    header h1 { margin: 0 0 4px; font-size: 1.4rem; }
+    header p { margin: 0; color: var(--muted); }
+    h2 { margin: 0 0 10px; font-size: 1.05rem; }
+
+    .lobby {
+      margin: 18px 0;
+      padding: 16px;
+      background: #111c30;
+      border: 1px solid #25344d;
+      border-radius: 12px;
+    }
+
+    .row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin: 8px 0; }
+    .row label { color: var(--muted); }
+
+    input, button {
+      min-height: 42px;
+      padding: 0 14px;
+      color: var(--ink);
+      background: #16233a;
+      border: 1px solid #33435c;
+      border-radius: 8px;
+      font: inherit;
+    }
+
+    input { min-width: min(100%, 300px); }
+    button { cursor: pointer; }
+    button:disabled { opacity: 0.45; cursor: not-allowed; }
+    button.primary {
+      color: #1b1402;
+      background: var(--accent);
+      border-color: var(--accent);
+      font-weight: 600;
+    }
+    button.primary:not(:disabled):hover { filter: brightness(1.08); }
+    :focus-visible { outline: 2px solid #8ab4ff; outline-offset: 2px; }
+
+    code {
+      padding: 2px 8px;
+      color: var(--accent);
+      background: #0b1220;
+      border-radius: 6px;
+      overflow-wrap: anywhere;
+      user-select: all;
+    }
+
+    #players { margin: 6px 0 0; padding-left: 20px; color: var(--muted); }
+    #status { margin: 14px 0 0; color: var(--muted); min-height: 1.4em; }
+
+    .table {
+      padding: 20px;
+      border: 6px solid #3b2a1a;
+      border-radius: 20px;
+      background: radial-gradient(ellipse at 50% 30%, #13684a 0%, var(--felt) 60%, var(--felt-edge) 100%);
+      box-shadow: inset 0 0 40px rgba(0, 0, 0, 0.45);
+    }
+
+    .table[hidden] { display: none; }
+
+    .community {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: center;
+      gap: 10px;
+      margin-bottom: 20px;
+      padding-bottom: 20px;
+      border-bottom: 1px dashed rgba(255, 255, 255, 0.18);
+    }
+
+    .slot { display: flex; flex-direction: column; align-items: center; gap: 6px; }
+    .slot small {
+      color: rgba(255, 255, 255, 0.65);
+      font-size: 0.75rem;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    .seats {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+      gap: 14px;
+    }
+
+    .seat {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 8px;
+      padding: 12px;
+      background: var(--panel);
+      border: 2px solid transparent;
+      border-radius: 12px;
+    }
+
+    .seat.me { border-color: var(--accent); }
+    .seat h3 { margin: 0; font-size: 0.95rem; font-weight: 600; }
+    .seat h3 small { color: rgba(255, 255, 255, 0.6); font-weight: 400; margin-left: 4px; }
+    .hand { display: flex; gap: 8px; }
+    .note { margin: 16px 0 0; color: rgba(255, 255, 255, 0.65); font-size: 0.85rem; text-align: center; }
+
+    .card { width: var(--cw); aspect-ratio: 2.5 / 3.5; perspective: 700px; }
+    .community .card { width: var(--ccw); }
+
+    .card-inner {
+      position: relative;
+      width: 100%;
+      height: 100%;
+      transform-style: preserve-3d;
+      transition: transform 0.55s cubic-bezier(0.2, 0.7, 0.2, 1);
+    }
+
+    .card.up .card-inner { transform: rotateY(180deg); }
+
+    .face {
+      position: absolute;
+      inset: 0;
+      -webkit-backface-visibility: hidden;
+      backface-visibility: hidden;
+    }
+
+    .face.front { transform: rotateY(180deg); }
+
+    .face img {
+      display: block;
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+      filter: drop-shadow(0 3px 5px rgba(0, 0, 0, 0.45));
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      .card-inner { transition: none; }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <h1>UltraPoker dealing demo</h1>
+      <p>One player creates a room, the others join it, then the room owner deals. Each player decrypts their own two cards, and everyone sees the five community cards.</p>
+    </header>
+
+    <section class="lobby" aria-label="Room">
+      <h2>Room</h2>
+      <div class="row">
+        <span>Your peer ID:</span> <code id="peerId">Connecting…</code>
+      </div>
+      <div class="row">
+        <button id="createButton" type="button" disabled>Create room</button>
+        <label for="roomId">or join with the room owner's ID</label>
+        <input id="roomId" type="text" autocomplete="off" spellcheck="false">
+        <button id="joinButton" type="button" disabled>Join room</button>
+      </div>
+      <h2>Players</h2>
+      <ul id="players"></ul>
+      <div class="row">
+        <button id="dealButton" class="primary" type="button" disabled>Deal</button>
+        <button id="retryButton" type="button" hidden>Retry drawing my cards</button>
+      </div>
+      <p id="status" role="status" aria-live="polite">Connecting to the peer network…</p>
+    </section>
+
+    <section class="table" id="table" aria-label="Poker table" hidden>
+      <div class="community" id="community" aria-label="Community cards"></div>
+      <div class="seats" id="seats"></div>
+      <p class="note">Only a card's owner can decrypt it, so other players' hole cards stay face down on your screen.</p>
+    </section>
+  </main>
+
+  <script src="https://cdn.jsdelivr.net/npm/peerjs@1.3.2/dist/peerjs.min.js"></script>
+  <!-- Your existing files, used as-is: networking, deck + encryption, card drawing and suits. -->
+  <script src="connectionManager.js"></script>
+  <script src="Engine.js"></script>
+  <script src="Poker.js"></script>
+  <script src="cardgenerator.js"></script>
+  <script>
+    (function () {
+      "use strict";
+
+      const $ = (id) => document.getElementById(id);
+      const setStatus = (message) => { $("status").textContent = message; };
+
+      if (typeof Peer === "undefined") {
+        setStatus("Could not load PeerJS from the CDN. Check your internet connection and reload.");
+        return;
+      }
+      if (typeof PeerConnectionManager === "undefined" || typeof P2PEngine === "undefined" ||
+          typeof Poker === "undefined" || typeof drawCard === "undefined") {
+        setStatus("Put this file next to connectionManager.js, Engine.js, Poker.js and cardgenerator.js.");
+        return;
+      }
+
+      const COMMUNITY_LABELS = ["Flop", "Flop", "Flop", "Turn", "River"];
+      const COMMUNITY_COUNT = COMMUNITY_LABELS.length;
+      const DRAW_START_DELAY_MS = 800; // lets every peer finish receiving the final encrypted deck
+      const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+      // ---------------------------------------------------------------- cards
+      // Suit symbol (as stored in the deck strings) -> suit name understood by drawCard().
+      // The last entry is the deck's 10th suit; Engine.js currently stores it as an empty
+      // string, so those cards are drawn with the "flower" suit from cardgenerator.js.
+      const SYMBOL_TO_SUIT = {
+        "♣": "club", "♦": "diamond", "♥": "heart", "♠": "spade",
+        "☪": "moon", "𖤓": "snowflake", "☘": "clover", "✝": "cross",
+        "☠": "skull", "": "flower",
+      };
+      const CARD_RE = /^(10|[2-9AJQK])(.*)$/u;
+
+      // cardgenerator.js appends its own canvas to the page; we only use it as a drawing surface.
+      canvas.remove();
+
+      const faceCache = new Map();
+      let backUrl = null;
+
+      function sizeCanvasToCard() {
+        canvas.width = Math.ceil(cardWidth) + 2;
+        canvas.height = Math.ceil(cardHeight) + 2;
+      }
+
+      function describeCard(cardId) {
+        const match = CARD_RE.exec(cardId);
+        if (!match || !(match[2] in SYMBOL_TO_SUIT)) {
+          throw new Error(`Unrecognised card in deck: "${cardId}"`);
+        }
+        return { rank: match[1], suit: SYMBOL_TO_SUIT[match[2]] };
+      }
+
+      function faceUrl(cardId) {
+        if (faceCache.has(cardId)) return faceCache.get(cardId);
+        const { rank, suit } = describeCard(cardId);
+        sizeCanvasToCard();
+        drawCard(1, 1, rank, suit, suitColors[suit]);
+        const url = canvas.toDataURL("image/png");
+        faceCache.set(cardId, url);
+        return url;
+      }
+
+      function backImageUrl() {
+        if (!backUrl) {
+          sizeCanvasToCard();
+          drawCardBack(1, 1);
+          backUrl = canvas.toDataURL("image/png");
+        }
+        return backUrl;
+      }
+
+      function makeImage(src) {
+        const img = document.createElement("img");
+        img.src = src;
+        img.alt = "";
+        img.draggable = false;
+        return img;
+      }
+
+      function createCard() {
+        const card = document.createElement("div");
+        card.className = "card";
+        card.setAttribute("role", "img");
+        card.setAttribute("aria-label", "Face-down card");
+
+        const inner = document.createElement("div");
+        inner.className = "card-inner";
+        const back = document.createElement("div");
+        back.className = "face back";
+        back.appendChild(makeImage(backImageUrl()));
+        const front = document.createElement("div");
+        front.className = "face front";
+
+        inner.append(back, front);
+        card.appendChild(inner);
+        return card;
+      }
+
+      function reveal(card, cardId) {
+        const { rank, suit } = describeCard(cardId);
+        card.querySelector(".front").replaceChildren(makeImage(faceUrl(cardId)));
+        card.setAttribute("aria-label", `${rank} of ${suit}`);
+        card.classList.add("up");
+      }
+
+      // ----------------------------------------------------------------- game
+      const connectionManager = new PeerConnectionManager();
+      const engine = new P2PEngine();
+      const poker = new Poker(connectionManager, engine);
+
+      let isLeader = false;
+      let joinedRoom = false;
+      let tableBuilt = false;
+      let drawingStarted = false;
+      let drawn = false;
+      let seatCards = []; // seatCards[playerIndex] = [card element, card element]
+      let boardCards = [];
+      const revealedPositions = new Set();
+      let lobbyKey = "";
+
+      const shortId = (id) => id.slice(0, 6);
+      const isOpen = (peerId) => Boolean(
+        connectionManager.peerConnections[peerId] && connectionManager.peerConnections[peerId].open
+      );
+
+      $("createButton").addEventListener("click", () => {
+        isLeader = true;
+        setStatus("Room created. Send your peer ID to the other players and deal once they have joined.");
+      });
+
+      $("joinButton").addEventListener("click", () => {
+        const hostId = $("roomId").value.trim();
+        if (!hostId || hostId === connectionManager.id) {
+          setStatus("Enter a different player's peer ID to join their room.");
+          return;
+        }
+        joinedRoom = true;
+        connectionManager.connectToPeer(hostId);
+        setStatus("Joining the room… waiting for the room owner to deal.");
+      });
+
+      $("dealButton").addEventListener("click", async () => {
+        const order = [connectionManager.id, ...new Set(connectionManager.peer_ids)].filter(Boolean);
+        try {
+          poker.setPlayers(order);
+          setStatus("Shuffling and encrypting the deck…");
+          await engine.startDeckCeremony(order);
+        } catch (error) {
+          setStatus(`Could not deal: ${error.message || error}`);
+        }
+      });
+
+      $("retryButton").addEventListener("click", () => draw());
+
+      connectionManager.getPeerId().then((id) => {
+        $("peerId").textContent = id;
+        setStatus("Connected. Create a room or join one.");
+        const requestedRoom = new URLSearchParams(location.search).get("room");
+        if (requestedRoom) {
+          $("roomId").value = requestedRoom;
+          $("joinButton").click();
+        }
+      }).catch((error) => {
+        setStatus(`Could not connect to the peer network: ${error.message || error}`);
+      });
+
+      function renderLobby() {
+        const ids = [...new Set([connectionManager.id, ...connectionManager.peer_ids])].filter(Boolean);
+        const key = ids.map((id) => `${id}:${id === connectionManager.id || isOpen(id)}`).join("|");
+        if (key === lobbyKey) return;
+        lobbyKey = key;
+        $("players").replaceChildren(...ids.map((id) => {
+          const item = document.createElement("li");
+          const name = connectionManager.peerNames[id] || shortId(id);
+          const status = id === connectionManager.id ? "you" : isOpen(id) ? "connected" : "connecting";
+          item.textContent = `${name} (${status})`;
+          return item;
+        }));
+      }
+
+      function updateControls() {
+        const hasId = Boolean(connectionManager.id);
+        const inRoom = isLeader || joinedRoom;
+        $("createButton").disabled = !hasId || inRoom;
+        $("joinButton").disabled = !hasId || inRoom;
+        $("roomId").disabled = inRoom;
+        const everyoneConnected = connectionManager.peer_ids.every(isOpen);
+        $("dealButton").disabled = !isLeader || connectionManager.peer_ids.length < 1 ||
+          !everyoneConnected || Boolean(engine.order);
+      }
+
+      function buildTable() {
+        const order = poker.order;
+        const me = order.indexOf(connectionManager.id);
+        if (me < 0) throw new Error("This peer is missing from the encrypted deck's player order.");
+
+        seatCards = order.map(() => [createCard(), createCard()]);
+        boardCards = Array.from({ length: COMMUNITY_COUNT }, () => createCard());
+
+        $("seats").replaceChildren(...order.map((peerId, index) => {
+          const seat = document.createElement("div");
+          seat.className = index === me ? "seat me" : "seat";
+          const title = document.createElement("h3");
+          title.textContent = index === me ? `Player ${index + 1} (you)` : `Player ${index + 1}`;
+          const id = document.createElement("small");
+          id.textContent = shortId(peerId);
+          title.appendChild(id);
+          const hand = document.createElement("div");
+          hand.className = "hand";
+          hand.append(...seatCards[index]);
+          seat.append(title, hand);
+          return seat;
+        }));
+
+        $("community").replaceChildren(...boardCards.map((card, index) => {
+          const slot = document.createElement("div");
+          slot.className = "slot";
+          const caption = document.createElement("small");
+          caption.textContent = COMMUNITY_LABELS[index];
+          slot.append(card, caption);
+          return slot;
+        }));
+
+        $("table").hidden = false;
+        tableBuilt = true;
+      }
+
+      async function requestWithRetry(position) {
+        for (let attempt = 1; ; attempt += 1) {
+          try {
+            return await poker.requestCard(position);
+          } catch (error) {
+            if (attempt >= 3) throw error;
+            await sleep(1000);
+          }
+        }
+      }
+
+      async function draw() {
+        $("retryButton").hidden = true;
+        setStatus("Drawing your cards…");
+        try {
+          const playerCount = poker.order.length;
+          const me = poker.order.indexOf(connectionManager.id);
+
+          // Same positions the repo uses: your cards are deck slots `me` and `me + n`,
+          // the community cards are the next slots after all players' private cards.
+          for (const slot of [0, 1]) {
+            const position = me + slot * playerCount;
+            if (revealedPositions.has(position)) continue;
+            const result = await requestWithRetry(position);
+            reveal(seatCards[me][slot], result.card);
+            revealedPositions.add(position);
+          }
+          for (let i = 0; i < COMMUNITY_COUNT; i += 1) {
+            const position = playerCount * 2 + i;
+            if (revealedPositions.has(position)) continue;
+            const result = await requestWithRetry(position);
+            reveal(boardCards[i], result.card);
+            revealedPositions.add(position);
+          }
+          drawn = true;
+          setStatus("Dealt. Your two cards and the five community cards are face up.");
+        } catch (error) {
+          setStatus(`Could not draw your cards: ${error.message || error}`);
+          $("retryButton").hidden = false;
+        }
+      }
+
+      setInterval(() => {
+        try {
+          renderLobby();
+          if (engine.order && !tableBuilt) {
+            if (!poker.order) poker.setPlayers(engine.order);
+            buildTable();
+            setStatus("Shuffling and encrypting the deck…");
+          }
+          if (engine.deckReady && tableBuilt && !drawingStarted && !drawn) {
+            drawingStarted = true;
+            setStatus("Deck encrypted by every player. Drawing your cards…");
+            setTimeout(draw, DRAW_START_DELAY_MS);
+          }
+          updateControls();
+        } catch (error) {
+          setStatus(`Something went wrong: ${error.message || error}`);
+        }
+      }, 250);
+    })();
+  </script>
+</body>
+</html>
