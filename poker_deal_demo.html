@@ -74,6 +74,14 @@
       user-select: all;
     }
 
+    #roomQr {
+      display: inline-block;
+      padding: 10px;
+      border-radius: 8px;
+      background: white;
+    }
+    #roomQr[hidden] { display: none; }
+
     #players { margin: 6px 0 0; padding-left: 20px; color: var(--muted); }
     #status { margin: 14px 0 0; color: var(--muted); min-height: 1.4em; }
 
@@ -175,6 +183,7 @@
       <div class="row">
         <span>Your peer ID:</span> <code id="peerId">Connecting…</code>
       </div>
+      <div id="roomQr" hidden></div>
       <div class="row">
         <button id="createButton" type="button" disabled>Create room</button>
         <label for="roomId">or join with the room owner's ID</label>
@@ -198,6 +207,7 @@
   </main>
 
   <script src="https://cdn.jsdelivr.net/npm/peerjs@1.3.2/dist/peerjs.min.js"></script>
+  <script src="lib/qrcode.js"></script>
   <!-- Your existing files, used as-is: networking, deck + encryption, card drawing and suits. -->
   <script src="connectionManager.js"></script>
   <script src="Engine.js"></script>
@@ -330,7 +340,16 @@
 
       $("createButton").addEventListener("click", () => {
         isLeader = true;
-        setStatus("Room created. Send your peer ID to the other players and deal once they have joined.");
+        const invitation = new URL(location.href);
+        invitation.searchParams.set("room", connectionManager.id);
+        $("roomQr").hidden = false;
+        new QRCode($("roomQr"), {
+          text: invitation.href,
+          width: 180,
+          height: 180,
+          useSVG: true,
+        });
+        setStatus("Room created. Scan the QR code or share your peer ID, then deal once players have joined.");
       });
 
       $("joinButton").addEventListener("click", () => {
