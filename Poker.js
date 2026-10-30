@@ -69,6 +69,7 @@ class Game {
  * @property {string} id
  * @property {(gameName: string, handler: (message: PokerMessage, from: string) => void|Promise<void>) => void} registerGameHandler
  * @property {(peerId: string, gameName: string, payload: Object) => void} sendGameMessage
+ * @property {(reason: string) => void} leaveGame
  */
 
 class Poker extends Game {
@@ -89,6 +90,8 @@ class Poker extends Game {
         this.pendingCardRequests = new Map();
         /** @type {number} */
         this.cardRequestCounter = 0;
+        /** @type {boolean} */
+        this.hasLeftGame = false;
         /** @type {((entry: Object) => void)|null} */
         this.onCardLog = null;
 
@@ -143,6 +146,9 @@ class Poker extends Game {
      * @returns {Promise<DecryptedCard>}
      */
     async requestCard(dealPosition) {
+        if (this.hasLeftGame) {
+            throw new Error("You have left the game.");
+        }
         if (!this.engine.deckReady || !this.order) {
             throw new Error("The encrypted deck and player order must be ready.");
         }
@@ -157,49 +163,76 @@ class Poker extends Game {
         let position = dealPosition;
         const ownerLayerIndex = ownerId === null ? -1 : this.order.indexOf(ownerId);
 
-        // Walk the layers backwards so each peer receives the card position and
-        // value that correspond to its own shuffle/encryption layer.
-        for (let layerIndex = this.order.length - 1; layerIndex >= 0; layerIndex -= 1) {
-            const peerId = this.order[layerIndex];
-            if (peerId === this.connectionManager.id) {
-                if (visibility === "private" && layerIndex === ownerLayerIndex) {
-                    position = this.engine.getPreviousLayerCardPosition(position, layerIndex);
+        try {
+            // Walk the layers backwards so each peer receives the card position and
+            // value that correspond to its own shuffle/encryption layer.
+            for (let layerIndex = this.order.length - 1; layerIndex >= 0; layerIndex -= 1) {
+                const peerId = this.order[layerIndex];
+                if (peerId === this.connectionManager.id) {
+                    if (visibility === "private" && layerIndex === ownerLayerIndex) {
+                        position = this.engine.getPreviousLayerCardPosition(position, layerIndex);
+                    } else {
+                        const decrypted = this.engine.decryptCardLayer(value, position, layerIndex);
+                        value = decrypted.value;
+                        position = decrypted.position;
+                    }
+                    this.logCardMessage("LOCAL DECRYPT", {
+                        dealPosition, layerIndex, value, position, visibility,
+                    });
                 } else {
-                    const decrypted = this.engine.decryptCardLayer(value, position, layerIndex);
-                    value = decrypted.value;
-                    position = decrypted.position;
+                    const result = await this.requestLayerFromPeer({
+                        peerId,
+                        requester: this.connectionManager.id,
+                        dealPosition,
+                        ownerId,
+                        visibility,
+                        layerIndex,
+                        value,
+                        position,
+                    });
+                    value = result.value;
+                    position = result.position;
                 }
-                this.logCardMessage("LOCAL DECRYPT", {
-                    dealPosition, layerIndex, value, position, visibility,
-                });
-            } else {
-                const result = await this.requestLayerFromPeer({
-                    peerId,
-                    requester: this.connectionManager.id,
-                    dealPosition,
-                    ownerId,
-                    visibility,
-                    layerIndex,
-                    value,
-                    position,
-                });
-                value = result.value;
-                position = result.position;
             }
-        }
 
-        if (visibility === "private") {
-            value = this.engine.decryptOwnCard(value, ownerLayerIndex);
-            this.logCardMessage("OWNER FINAL DECRYPT", {
-                dealPosition, layerIndex: ownerLayerIndex, value, visibility,
-            });
-        }
+            if (visibility === "private") {
+                value = this.engine.decryptOwnCard(value, ownerLayerIndex);
+                this.logCardMessage("OWNER FINAL DECRYPT", {
+                    dealPosition, layerIndex: ownerLayerIndex, value, visibility,
+                });
+            }
 
-        const card = this.engine.cardDefinitions[value];
-        if (typeof card !== "string") {
-            throw new Error("Decrypted card ID is not in this game's deck.");
+            const card = this.engine.cardDefinitions[value];
+            if (typeof card !== "string") {
+                throw new Error("Decrypted card ID is not in this game's deck.");
+            }
+            return { cardId: value, card, ownerId, visibility, dealPosition };
+        } catch (error) {
+            const details = error instanceof Error ? error.message : String(error);
+            const reason =
+                `Card decryption failed; leaving the game because this may indicate a dishonest node. ${details}`;
+            this.leaveGame(reason);
+            throw new Error(reason);
         }
-        return { cardId: value, card, ownerId, visibility, dealPosition };
+    }
+
+    /**
+     * Leave the peer game after a card cannot be decrypted reliably.
+     * @param {string} reason
+     * @returns {void}
+     */
+    leaveGame(reason) {
+        if (this.hasLeftGame) return;
+        this.hasLeftGame = true;
+        this.players = [];
+        this.order = null;
+
+        for (const pending of this.pendingCardRequests.values()) {
+            clearTimeout(pending.timer);
+            pending.reject(new Error("You have left the game."));
+        }
+        this.pendingCardRequests.clear();
+        this.connectionManager.leaveGame(reason);
     }
 
     /**

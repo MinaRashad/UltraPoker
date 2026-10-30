@@ -43,6 +43,8 @@ it is not cryptographically secure.
   returns the transformed card value and its mapped position.
 - Applies the requesting player's final private-key step locally for their own
   private card.
+- Leaves the peer network if a card cannot be decrypted, since this may
+  indicate a dishonest participant.
 
 Poker does not reveal an entire encrypted deck. Reveal proceeds one card at a
 time, removing the relevant participant layers while leaving the shared final

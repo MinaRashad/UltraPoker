@@ -25,6 +25,7 @@ class PeerConnectionManager {
     this.log = [];
     this.name = name;
     this.canConnect = true
+    this.hasLeftGame = false;
     // Handlers process the two deck-ceremony messages after they arrive.
     this.reliableMessageHandlers = new Map();
     this.gameMessageHandlers = new Map();
@@ -175,6 +176,25 @@ class PeerConnectionManager {
       throw new Error(`Not connected to peer ${peer_id}`);
     }
     connection.send({ type: "game_message", game: gameName, payload });
+  }
+
+  /**
+   * Close this client's peer connections and leave the peer network.
+   * @param {string} reason
+   * @returns {void}
+   */
+  leaveGame(reason) {
+    if (this.hasLeftGame) return;
+    this.hasLeftGame = true;
+    this.canConnect = false;
+    this.logMessage("ERROR", `Leaving game: ${reason}`, "System");
+
+    for (const connection of Object.values(this.peerConnections)) {
+      connection.close();
+    }
+    this.peer_ids = [];
+    this.peerConnections = {};
+    this.peer.destroy();
   }
 
   /**
